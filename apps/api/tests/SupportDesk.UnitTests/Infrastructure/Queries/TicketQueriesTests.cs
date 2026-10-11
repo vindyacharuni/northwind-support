@@ -204,6 +204,87 @@ public class TicketQueriesTests
         Assert.Equal(2, result.Items.Count);
     }
 
+    [Fact]
+    public async Task GetPagedAsync_WhenSlaStatusIsBreached_ReturnsOnlyBreachedTickets()
+    {
+        await using var db = await CreateDbAsync();
+        var queries = new TicketQueries(db, new FixedClock());
+
+        var customer = new Customer("Acme", "acme@example.com", null, CustomerTier.Standard, FixedClock.DefaultNow);
+        var category = new Category("General", false, false);
+        db.AddRange(customer, category);
+        await db.SaveChangesAsync();
+
+        var breachedPastDue = Ticket.Raise("TCK-8001", "Past due", "Body", customer.Id, category.Id, TicketPriority.High, FixedClock.DefaultNow.AddHours(-10), null, FixedClock.DefaultNow.AddHours(-1));
+        var breachedLate = Ticket.Raise("TCK-8002", "Late resolved", "Body", customer.Id, category.Id, TicketPriority.High, FixedClock.DefaultNow.AddHours(-10), null, FixedClock.DefaultNow.AddHours(-5));
+        breachedLate.ChangeStatus(TicketStatus.Resolved, FixedClock.DefaultNow.AddHours(-2));
+        var met = Ticket.Raise("TCK-8003", "On time", "Body", customer.Id, category.Id, TicketPriority.High, FixedClock.DefaultNow.AddHours(-10), null, FixedClock.DefaultNow.AddHours(-1));
+        met.ChangeStatus(TicketStatus.Resolved, FixedClock.DefaultNow.AddHours(-5));
+
+        db.AddRange(breachedPastDue, breachedLate, met);
+        await db.SaveChangesAsync();
+
+        var result = await queries.GetPagedAsync(new TicketQuery { SlaStatus = SlaStatus.Breached, Page = 1, PageSize = 20 }, CancellationToken.None);
+
+        Assert.Equal(2, result.TotalCount);
+        Assert.All(result.Items, item => Assert.Equal(SlaStatus.Breached, item.SlaStatus));
+    }
+
+    [Fact]
+    public async Task GetPagedAsync_WhenSlaStatusIsMet_ReturnsOnlyMetTickets()
+    {
+        await using var db = await CreateDbAsync();
+        var queries = new TicketQueries(db, new FixedClock());
+
+        var customer = new Customer("Acme", "acme@example.com", null, CustomerTier.Standard, FixedClock.DefaultNow);
+        var category = new Category("General", false, false);
+        db.AddRange(customer, category);
+        await db.SaveChangesAsync();
+
+        var met = Ticket.Raise("TCK-9001", "On time", "Body", customer.Id, category.Id, TicketPriority.High, FixedClock.DefaultNow.AddHours(-10), null, FixedClock.DefaultNow.AddHours(-1));
+        met.ChangeStatus(TicketStatus.Resolved, FixedClock.DefaultNow.AddHours(-5));
+
+        var open = Ticket.Raise("TCK-9002", "Open", "Body", customer.Id, category.Id, TicketPriority.High, FixedClock.DefaultNow, null, FixedClock.DefaultNow.AddHours(5));
+
+        db.AddRange(met, open);
+        await db.SaveChangesAsync();
+
+        var result = await queries.GetPagedAsync(new TicketQuery { SlaStatus = SlaStatus.Met, Page = 1, PageSize = 20 }, CancellationToken.None);
+
+        Assert.Equal(1, result.TotalCount);
+        Assert.Equal(met.Id, result.Items[0].Id);
+    }
+
+    [Fact]
+    public async Task GetEscalationsAsync_ReturnsEscalationsNewestFirst()
+    {
+        await using var db = await CreateDbAsync();
+        var queries = new TicketQueries(db, new FixedClock());
+
+        var customer = new Customer("Acme", "acme@example.com", null, CustomerTier.Standard, FixedClock.DefaultNow);
+        var category = new Category("General", false, false);
+        var agent = new Agent("Alex Turner", "alex@example.com", 10, FixedClock.DefaultNow);
+        db.AddRange(customer, category, agent);
+        await db.SaveChangesAsync();
+
+        var ticket = Ticket.Raise("TCK-9501", "Escalated", "Body", customer.Id, category.Id, TicketPriority.Low, FixedClock.DefaultNow);
+        db.Add(ticket);
+        await db.SaveChangesAsync();
+
+        var esc1 = new TicketEscalation(ticket.Id, TicketPriority.Low, TicketPriority.Medium, null, agent.Id, FixedClock.DefaultNow.AddHours(72), FixedClock.DefaultNow.AddHours(24), "First escalation", "Manager", FixedClock.DefaultNow.AddHours(1));
+        var esc2 = new TicketEscalation(ticket.Id, TicketPriority.Medium, TicketPriority.High, agent.Id, agent.Id, FixedClock.DefaultNow.AddHours(24), FixedClock.DefaultNow.AddHours(8), "Second escalation", "Director", FixedClock.DefaultNow.AddHours(2));
+        db.AddRange(esc1, esc2);
+        await db.SaveChangesAsync();
+
+        var history = await queries.GetEscalationsAsync(ticket.Id, CancellationToken.None);
+
+        Assert.Equal(2, history.Count);
+        Assert.Equal("Second escalation", history[0].Reason);
+        Assert.Equal("First escalation", history[1].Reason);
+        Assert.Equal(TicketPriority.High, history[0].ToPriority);
+        Assert.Equal("Alex Turner", history[0].ToAgent?.FullName);
+    }
+
     private static async Task<SupportDbContext> CreateDbAsync()
     {
         var connection = new SqliteConnection("Data Source=:memory:");

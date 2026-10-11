@@ -12,4 +12,11 @@ public sealed class AgentRepository(SupportDbContext db) : IAgentRepository
         db.Set<Agent>()
             .Include(a => a.Specializations)
             .FirstOrDefaultAsync(a => a.Id == id, ct);
+
+    /// <summary>Loads all active agents with their specializations.</summary>
+    public async Task<IReadOnlyList<Agent>> GetAllActiveAsync(CancellationToken ct) =>
+        await db.Set<Agent>()
+            .Include(a => a.Specializations)
+            .Where(a => a.IsActive)
+            .ToListAsync(ct);
 }

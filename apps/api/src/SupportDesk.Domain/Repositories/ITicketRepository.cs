@@ -15,4 +15,10 @@ public interface ITicketRepository
     Task<string> NextReferenceAsync(CancellationToken ct);
 
     Task AddAsync(Ticket ticket, CancellationToken ct);
+
+    /// <summary>Returns the count of open tickets (not Resolved or Closed) grouped by assigned agent id.</summary>
+    Task<Dictionary<int, int>> GetOpenTicketCountsByAgentAsync(CancellationToken ct);
+
+    /// <summary>Records an immutable escalation history row.</summary>
+    Task AddEscalationAsync(TicketEscalation escalation, CancellationToken ct);
 }

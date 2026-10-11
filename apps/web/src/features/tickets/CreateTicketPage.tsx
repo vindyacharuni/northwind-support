@@ -5,6 +5,8 @@ import { Spinner } from '../../components/Spinner';
 import { useReferenceData } from '../../hooks/useReferenceData';
 import type { TicketDetail } from '../../types/api';
 import { CreateTicketForm } from './components/CreateTicketForm';
+import { PriorityBadge } from './components/TicketBadges';
+import { SlaCell } from './components/SlaCell';
 
 export function CreateTicketPage() {
   const reference = useReferenceData();
@@ -33,6 +35,57 @@ export function CreateTicketPage() {
           <p>
             Raised <strong>{created.reference}</strong> for {created.customer.name}.
           </p>
+
+          <div className="triage-result" style={{ marginTop: '1rem', marginBottom: '1.25rem' }}>
+            <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.75rem' }}>
+              Automated Triage Result
+            </h3>
+            <dl className="summary" style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '0.5rem 1rem' }}>
+              <dt>Applied Priority</dt>
+              <dd>
+                <PriorityBadge priority={created.priority} />
+                {created.triage?.priorityReason && (
+                  <span className="summary__note" style={{ marginLeft: '0.5rem' }}>
+                    {created.triage.priorityReason}
+                  </span>
+                )}
+              </dd>
+
+              <dt>SLA Due Date</dt>
+              <dd>
+                <SlaCell dueAtUtc={created.dueAtUtc} slaStatus={created.slaStatus} />
+                {created.triage?.slaReason && (
+                  <span className="summary__note" style={{ display: 'block', marginTop: '0.25rem' }}>
+                    {created.triage.slaReason}
+                  </span>
+                )}
+              </dd>
+
+              <dt>Assigned Agent</dt>
+              <dd>
+                {created.assignedAgent ? (
+                  <span>
+                    <strong>{created.assignedAgent.fullName}</strong>
+                    {created.triage?.assignmentReason && (
+                      <span className="summary__note" style={{ marginLeft: '0.5rem' }}>
+                        ({created.triage.assignmentReason})
+                      </span>
+                    )}
+                  </span>
+                ) : (
+                  <span>
+                    <em>Unassigned</em>
+                    {created.triage?.assignmentReason && (
+                      <span className="summary__note" style={{ display: 'block', marginTop: '0.25rem', color: '#b45309' }}>
+                        {created.triage.assignmentReason}
+                      </span>
+                    )}
+                  </span>
+                )}
+              </dd>
+            </dl>
+          </div>
+
           <div className="button-row">
             <button
               type="button"
