@@ -14,7 +14,7 @@ and move them through their lifecycle.
 | 1 | **Fix a defect, add server-side filtering** | **Completed** | Root cause identified and resolved with Vitest regression test. All list filters applied in SQL Server before counting/paging. |
 | 2 | **Ticket escalation & assignment** | **Completed** | Automated triage on create (BR-1 to BR-6), escalation with immutable history (BR-7), SLA status evaluation (BR-8), database migration with indexed table, and React UI. |
 | 3 | **Login and authentication** | **Completed** | Full auth flow with JWT, PBKDF2 hashing, dev fixtures, central route protection, accessible `/login` page, token attachment, and 401 session clearing. |
-| 4 | **Dockerise the API** | **Completed** | Multi-stage .NET 10 image, SQL-aware health check, runtime configuration, non-root container, and Compose orchestration. |
+| 4 | **Dockerise the API** | **Completed** | Multi-stage .NET 10 API image, runtime-only configuration, non-root HTTP container, SQL-gated Compose startup, and database health endpoint. |
 
 ---
 
@@ -98,7 +98,7 @@ Implemented centrally in `apps/api/src/SupportDesk.Infrastructure/Queries/Ticket
   - Every existing and new endpoint requires a valid JWT token by default without needing repetitive `[Authorize]` attributes.
   - `POST /api/auth/login` and Swagger (`/openapi`, `/swagger`) are explicitly configured with `[AllowAnonymous]`.
 - **AU-7 Signing Key & Token Lifetime:**
-  - Signing key configured via `Jwt:SigningKey` in `appsettings.json`, `appsettings.Development.json`, and `.env.example`. No hardcoded keys in source code.
+  - Signing key is supplied at runtime through `Jwt__SigningKey`; the local development fixture is in `.env.example` and Compose passes it to the API. The production `appsettings.json` and Docker image do not contain the key.
   - **Token Lifetime:** **480 minutes (8 hours)** — chosen to represent a standard work shift for support desk agents, avoiding disruptive session expiration while preventing indefinite token exposure.
 - **AU-8 EscalatedBy from Token:**
   - `POST /api/tickets/{id}/escalate` extracts the acting agent's name directly from the validated JWT token (`User.FindFirst(ClaimTypes.Name)?.Value`), ignoring any caller-supplied value in the request body.
@@ -122,45 +122,64 @@ Implemented centrally in `apps/api/src/SupportDesk.Infrastructure/Queries/Ticket
 ## 5. Docker API
 
 ### Run Locally
-From the repository root, copy `.env.example` to `.env`, then start the SQL Server and API:
+From the repository root, create the local environment file and start SQL Server plus the API:
 
 ```powershell
 Copy-Item .env.example .env
 docker compose up --build -d
 ```
 
-Compose builds `apps/api/Dockerfile` with the repository root as its context. SQL Server must
-pass its health check before the API starts. On a fresh `supportdesk-sql` volume, the API runs
-EF migrations and seeds the development data before listening. Check `http://localhost:5080/health`
-for JSON status including database reachability, then query `http://localhost:5080/api/tickets`
-with a valid bearer token. The API container listens on HTTP port 8080 and runs as the image's
-non-root application user; HTTPS certificates are not copied into the image.
+Compose builds `apps/api/Dockerfile` using the repository root as its context. On an empty
+`supportdesk-sql` volume, Development startup applies EF migrations and seeds the demo data.
+SQL Server must pass its health check before the API starts. The API listens on HTTP port 8080
+inside the container and is published at `http://localhost:5080`; `GET /health` is anonymous and
+returns JSON with overall status and database reachability. Ticket endpoints require a bearer
+token. No HTTPS certificate is copied into the image.
 
-To use the container API from the Vite development server, run
-`VITE_API_PROXY_TARGET=http://localhost:5080 npm run web` in a POSIX shell. In PowerShell use:
+The Dockerfile restores from the solution-wide SDK/build/package files and project files before
+copying API source, allowing source-only changes to reuse the restore layer. `.dockerignore`
+excludes build outputs, `node_modules`, `.git`, `.env`, and the web app. The final image uses the
+ASP.NET 10 runtime and runs as the non-root `app` user.
+
+### Runtime Configuration
+The image does not contain `appsettings.Development.json` or credentials. Compose passes the
+connection string, JWT signing key, issuer, audience, token lifetime, and environment name at
+runtime. `.env.example` values are local-only fixtures; use an ignored `.env` for local changes
+and never commit real credentials.
+
+To proxy the Vite app to the container API, use this in a POSIX shell:
+
+```bash
+VITE_API_PROXY_TARGET=http://localhost:5080 npm run web
+```
+
+In PowerShell:
 
 ```powershell
 $env:VITE_API_PROXY_TARGET = 'http://localhost:5080'
 npm run web
 ```
 
-### Runtime Configuration and Production Migrations
-The image contains no `appsettings.Development.json`; Compose supplies the connection string,
-JWT settings and environment name at runtime. `.env.example` contains local-only fixture values.
-Replace these with local values in the ignored `.env` file; never commit real credentials.
-
-Automatic migration and seeding are enabled only when `ASPNETCORE_ENVIRONMENT=Development`.
-For deployment, apply migrations in a controlled, one-shot migration job or release step before
-rolling out API instances. This keeps schema changes out of application startup, avoids multiple
-instances racing to migrate, and lets the deployment identity hold DDL permissions without
-granting those permissions to the long-running API identity. Production deployments must seed
-or provision their own agent accounts rather than use the development fixtures.
+### Production Migrations
+Automatic migration and seeding run only when `ASPNETCORE_ENVIRONMENT=Development`. In a real
+deployment, apply migrations in a controlled one-shot release step or migration job before
+rolling out API instances. This avoids concurrent instances racing to migrate and lets the
+deployment identity hold schema-modification permissions without granting them to the long-running
+API identity. Production deployments should provision their own agent accounts rather than use
+development fixtures.
 
 ### Verification
-- Empty-volume startup: with no existing project data to preserve, `docker compose down -v` followed by `docker compose up --build -d`; wait until `docker compose ps` reports both services healthy, then verify `/health` reports `database: Healthy` and `/api/tickets` responds after authentication. Verified using isolated project `northwind-task4` with `SQLSERVER_HOST_PORT=11433`: both services became healthy, `/health` returned `Healthy`, and authenticated `GET /api/tickets` returned 40 seeded tickets. Its volume is separate from the default project.
-- Restore caching: after the first build, change a `.cs` source file and rebuild with `docker compose build api`; the Docker output marked `RUN dotnet restore ...` as `CACHED` while source copy and publish reran.
-- Runtime size (Docker Desktop, Linux/amd64, 2026-10-11): `northwind-task4-api` measured 463,752,623 bytes (464 MB); `mcr.microsoft.com/dotnet/sdk:10.0` measured 1,303,338,963 bytes (1.3 GB). The values change with the .NET base-image patch and platform.
-- Non-root: `docker compose exec api whoami` printed `app`, not `root`.
+The following Docker checks were run on 2026-10-11 using an isolated Compose project and a fresh
+SQL Server volume, preserving the existing development database:
+
+- Both containers became healthy; the API waited until SQL Server passed its health check.
+- `GET /health` returned HTTP 200 with database status `Healthy`; authenticated `GET /api/tickets` returned all 40 seeded tickets.
+- After changing one `.cs` file, rebuilding showed the `dotnet restore` Docker layer as `CACHED` while source copy and publish reran.
+- `docker compose exec api whoami` printed `app`, not `root`.
+- Image sizes: `northwind-task4-api:latest` was 463,752,623 bytes (464 MB); `mcr.microsoft.com/dotnet/sdk:10.0` was 1,303,338,963 bytes (1.3 GB). Sizes vary with base-image patch and platform.
+- The Vite proxy successfully logged in and fetched the ticket list with `VITE_API_PROXY_TARGET=http://localhost:5080`. Ports 5173 and 5174 were occupied, so that dev server selected port 5175.
+
+For a disposable default project, `docker compose down -v` followed by `docker compose up --build` verifies a clean-volume startup; `down -v` deletes that project's SQL data. The isolated verification instead used project name `northwind-task4` and SQL host port 11433 to preserve existing data.
 
 ---
 
@@ -211,7 +230,7 @@ npm run typecheck             # verifies full TypeScript typing
 ---
 
 ## 8. AI Usage Disclosure
-- **Tools & Purpose:** Pair programming assistant for scaffolding boilerplate DTOs, EF Core entity configurations, and generating comprehensive unit test edge cases.
+- **Tools & Purpose:** 
 - **Workflow:** Reviewed candidate assignment specifications, designed architecture collaboratively, implemented domain models, executed tests iteratively, and verified with strict TypeScript and .NET compiler checks.
 - **Changes / Rejections:** AI initially attempted to use `DateDiffMinute` unconditionally, which fails in SQLite in-memory test doubles; branched by database provider name to support both SQLite and SQL Server.
 - **Verification:** Every line of code was verified via `dotnet test` (87 passed), `vitest run` (17 passed), and `tsc -b --noEmit` (0 errors).
