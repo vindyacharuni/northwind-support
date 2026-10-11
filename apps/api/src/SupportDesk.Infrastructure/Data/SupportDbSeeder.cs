@@ -24,6 +24,7 @@ public sealed class SupportDbSeeder(SupportDbContext db, IClock clock, ILogger<S
     {
         if (await db.Set<Ticket>().AnyAsync(ct))
         {
+            await EnsureDevelopmentLoginAsync(ct);
             logger.LogInformation("Seed data already present; skipping.");
             return;
         }
@@ -71,6 +72,35 @@ public sealed class SupportDbSeeder(SupportDbContext db, IClock clock, ILogger<S
 
     public const string DefaultDevPassword = "Password123!";
 
+    private async Task EnsureDevelopmentLoginAsync(CancellationToken ct)
+    {
+        var developmentAgent = await db.Set<Agent>().SingleOrDefaultAsync(agent =>
+            agent.Email == "alex.turner@northwind-support.example"
+            || agent.Email == "vindy@northwind.example"
+            || agent.FullName == "Alex Turner", ct);
+        if (developmentAgent is null)
+        {
+            return;
+        }
+
+        if (developmentAgent.Email is "alex.turner@northwind-support.example" or "vindy@northwind.example")
+        {
+            developmentAgent.ChangeEmail("vindy@northwind.example");
+        }
+
+        if (developmentAgent.FullName is "Alex Turner" or "Vindya")
+        {
+            developmentAgent.ChangeFullName("Vindya");
+        }
+
+        if (string.IsNullOrWhiteSpace(developmentAgent.PasswordHash))
+        {
+            developmentAgent.SetPasswordHash(new Security.PasswordHasher().HashPassword(DefaultDevPassword));
+        }
+
+        await db.SaveChangesAsync(ct);
+    }
+
     private static List<Agent> SeedAgents(DateTime now)
     {
         var hasher = new Security.PasswordHasher();
@@ -81,7 +111,7 @@ public sealed class SupportDbSeeder(SupportDbContext db, IClock clock, ILogger<S
 
         return
         [
-            new("Alex Turner", "alex.turner@northwind-support.example", 10, now.AddDays(-500), devPasswordHash),
+            new("Vindya", "vindy@northwind.example", 10, now.AddDays(-500), devPasswordHash),
             new("Ben Osei", "ben.osei@northwind-support.example", 8, now.AddDays(-460), devPasswordHash),
             new("Priya Nair", "priya.nair@northwind-support.example", 8, now.AddDays(-400), devPasswordHash),
             new("Sara Lindqvist", "sara.lindqvist@northwind-support.example", 6, now.AddDays(-280), devPasswordHash),
@@ -92,7 +122,7 @@ public sealed class SupportDbSeeder(SupportDbContext db, IClock clock, ILogger<S
 
     /// <summary>
     /// Who can handle what:
-    /// Alex - General, Technical | Ben - Technical, Outage | Priya - Outage, Security
+    /// Vindya - General, Technical | Ben - Technical, Outage | Priya - Outage, Security
     /// Sara - General, Billing   | Marcus - Billing, Security | Yuki (inactive) - Technical
     /// </summary>
     private static void SeedSpecializations(List<Agent> agents, List<Category> categories)
