@@ -14,7 +14,7 @@ and move them through their lifecycle.
 | 1 | **Fix a defect, add server-side filtering** | **Completed** | Root cause identified and resolved with Vitest regression test. All list filters applied in SQL Server before counting/paging. |
 | 2 | **Ticket escalation & assignment** | **Completed** | Automated triage on create (BR-1 to BR-6), escalation with immutable history (BR-7), SLA status evaluation (BR-8), database migration with indexed table, and React UI. |
 | 3 | **Login and authentication** | **Completed** | Full auth flow with JWT, PBKDF2 hashing, dev fixtures, central route protection, accessible `/login` page, token attachment, and 401 session clearing. |
-| 4 | **Dockerise the API** | *Next* | Planned. |
+| 4 | **Dockerise the API** | **Completed** | Multi-stage .NET 10 image, SQL-aware health check, runtime configuration, non-root container, and Compose orchestration. |
 
 ---
 
@@ -119,7 +119,52 @@ Implemented centrally in `apps/api/src/SupportDesk.Infrastructure/Queries/Ticket
 
 ---
 
-## 5. Design Decisions: Chosen, Rejected, and Why
+## 5. Docker API
+
+### Run Locally
+From the repository root, copy `.env.example` to `.env`, then start the SQL Server and API:
+
+```powershell
+Copy-Item .env.example .env
+docker compose up --build -d
+```
+
+Compose builds `apps/api/Dockerfile` with the repository root as its context. SQL Server must
+pass its health check before the API starts. On a fresh `supportdesk-sql` volume, the API runs
+EF migrations and seeds the development data before listening. Check `http://localhost:5080/health`
+for JSON status including database reachability, then query `http://localhost:5080/api/tickets`
+with a valid bearer token. The API container listens on HTTP port 8080 and runs as the image's
+non-root application user; HTTPS certificates are not copied into the image.
+
+To use the container API from the Vite development server, run
+`VITE_API_PROXY_TARGET=http://localhost:5080 npm run web` in a POSIX shell. In PowerShell use:
+
+```powershell
+$env:VITE_API_PROXY_TARGET = 'http://localhost:5080'
+npm run web
+```
+
+### Runtime Configuration and Production Migrations
+The image contains no `appsettings.Development.json`; Compose supplies the connection string,
+JWT settings and environment name at runtime. `.env.example` contains local-only fixture values.
+Replace these with local values in the ignored `.env` file; never commit real credentials.
+
+Automatic migration and seeding are enabled only when `ASPNETCORE_ENVIRONMENT=Development`.
+For deployment, apply migrations in a controlled, one-shot migration job or release step before
+rolling out API instances. This keeps schema changes out of application startup, avoids multiple
+instances racing to migrate, and lets the deployment identity hold DDL permissions without
+granting those permissions to the long-running API identity. Production deployments must seed
+or provision their own agent accounts rather than use the development fixtures.
+
+### Verification
+- Empty-volume startup: with no existing project data to preserve, `docker compose down -v` followed by `docker compose up --build -d`; wait until `docker compose ps` reports both services healthy, then verify `/health` reports `database: Healthy` and `/api/tickets` responds after authentication. Verified using isolated project `northwind-task4` with `SQLSERVER_HOST_PORT=11433`: both services became healthy, `/health` returned `Healthy`, and authenticated `GET /api/tickets` returned 40 seeded tickets. Its volume is separate from the default project.
+- Restore caching: after the first build, change a `.cs` source file and rebuild with `docker compose build api`; the Docker output marked `RUN dotnet restore ...` as `CACHED` while source copy and publish reran.
+- Runtime size (Docker Desktop, Linux/amd64, 2026-10-11): `northwind-task4-api` measured 463,752,623 bytes (464 MB); `mcr.microsoft.com/dotnet/sdk:10.0` measured 1,303,338,963 bytes (1.3 GB). The values change with the .NET base-image patch and platform.
+- Non-root: `docker compose exec api whoami` printed `app`, not `root`.
+
+---
+
+## 6. Design Decisions: Chosen, Rejected, and Why
 
 | Decision | Chosen | Rejected | Why |
 | --- | --- | --- | --- |
@@ -134,7 +179,7 @@ Implemented centrally in `apps/api/src/SupportDesk.Infrastructure/Queries/Ticket
 
 ---
 
-## 6. Testing
+## 7. Testing
 
 ### How to Run
 ```bash
@@ -165,7 +210,7 @@ npm run typecheck             # verifies full TypeScript typing
 
 ---
 
-## 7. AI Usage Disclosure
+## 8. AI Usage Disclosure
 - **Tools & Purpose:** Pair programming assistant for scaffolding boilerplate DTOs, EF Core entity configurations, and generating comprehensive unit test edge cases.
 - **Workflow:** Reviewed candidate assignment specifications, designed architecture collaboratively, implemented domain models, executed tests iteratively, and verified with strict TypeScript and .NET compiler checks.
 - **Changes / Rejections:** AI initially attempted to use `DateDiffMinute` unconditionally, which fails in SQLite in-memory test doubles; branched by database provider name to support both SQLite and SQL Server.
@@ -173,7 +218,7 @@ npm run typecheck             # verifies full TypeScript typing
 
 ---
 
-## 8. Known Limitations
+## 9. Known Limitations
 - Self-service registration, password reset, and email verification workflows are not implemented (all accounts are provisioned agents).
 - OAuth2, OpenID Connect, and SSO enterprise providers are not integrated (direct password authentication only).
 - Refresh tokens and sliding session extensions are omitted; sessions expire at the 8-hour boundary.
