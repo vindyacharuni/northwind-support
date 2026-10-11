@@ -14,22 +14,22 @@ namespace SupportDesk.Infrastructure.Queries;
 /// Ticket reads. Projected in the database and never tracked. Aggregates hold only each
 /// other's ids, so the customer, category and agent labels are joined in here, on the read side.
 /// </summary>
+    
 public sealed class TicketQueries(SupportDbContext db, IClock clock) : ITicketQueries
 {
     /// <remarks>
-    /// Sorts and pages every ticket. The filter values bound into <paramref name="query"/>
-    /// (search, status, priority, category, customer, agent, unassigned-only) are not applied
-    /// yet: server-side filtering is still to be built.
+    /// Filters, counts, sorts and pages in the database, in that order, so the total and the
+    /// page both describe the filtered set. Each filter lives in <see cref="ApplyFilters"/>.
     /// </remarks>
     public async Task<PagedResult<TicketListItemDto>> GetPagedAsync(TicketQuery query, CancellationToken ct)
     {
-        var tickets = TicketsWithLabels();
+        var filtered = ApplyFilters(TicketsWithLabels(), query);
 
-        var totalCount = await tickets.CountAsync(ct);
+        var totalCount = await filtered.CountAsync(ct);
 
         var now = clock.UtcNow;
 
-        var items = await ApplySort(tickets, query)
+        var items = await ApplySort(filtered, query)
             .Skip((query.Page - 1) * query.PageSize)
             .Take(query.PageSize)
             .Select(x => new TicketListItemDto
@@ -117,6 +117,57 @@ public sealed class TicketQueries(SupportDbContext db, IClock clock) : ITicketQu
         from agent in db.Set<Agent>().Where(a => a.Id == ticket.AssignedAgentId).DefaultIfEmpty()
         select new TicketWithLabels { Ticket = ticket, Customer = customer, Category = category, Agent = agent };
 
+    private static IQueryable<TicketWithLabels> ApplyFilters(IQueryable<TicketWithLabels> source, TicketQuery query)
+    {
+        var filtered = source;
+
+        if (query.Status is not null)
+        {
+            filtered = filtered.Where(x => x.Ticket.Status == query.Status.Value);
+        }
+
+        if (query.Priority is not null)
+        {
+            filtered = filtered.Where(x => x.Ticket.Priority == query.Priority.Value);
+        }
+
+        if (query.CategoryId is not null)
+        {
+            filtered = filtered.Where(x => x.Ticket.CategoryId == query.CategoryId.Value);
+        }
+
+        if (query.CustomerId is not null)
+        {
+            filtered = filtered.Where(x => x.Ticket.CustomerId == query.CustomerId.Value);
+        }
+
+        if (query.AssignedAgentId is not null)
+        {
+            filtered = filtered.Where(x => x.Ticket.AssignedAgentId == query.AssignedAgentId.Value);
+        }
+
+        if (query.UnassignedOnly)
+        {
+            filtered = filtered.Where(x => x.Ticket.AssignedAgentId == null);
+        }
+
+        var search = query.Search?.Trim();
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var pattern = $"%{EscapeLike(search)}%";
+            filtered = filtered.Where(x =>
+                EF.Functions.Like(x.Ticket.Title, pattern, "\\")
+                || EF.Functions.Like(x.Ticket.Reference, pattern, "\\")
+                || EF.Functions.Like(x.Customer.Name, pattern, "\\"));
+        }
+
+        return filtered;
+    }
+     /// <summary>Escapes LIKE wildcards so user input such as "50%" is matched literally.</summary>
+    private static string EscapeLike(string value) =>
+        value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
+
+    
     private static IQueryable<TicketWithLabels> ApplySort(IQueryable<TicketWithLabels> source, TicketQuery query)
     {
         var descending = !string.Equals(query.SortDirection, "asc", StringComparison.OrdinalIgnoreCase);
