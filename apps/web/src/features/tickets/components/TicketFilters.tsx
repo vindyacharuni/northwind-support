@@ -2,6 +2,7 @@ import type {
   Agent,
   Category,
   CustomerListItem,
+  SlaStatus,
   TicketFilters as Filters,
   TicketPriority,
   TicketStatus,
@@ -84,6 +85,26 @@ export function TicketFilters({
                 {priority}
               </option>
             ))}
+          </select>
+        </div>
+
+        <div className="field">
+          <label className="field__label" htmlFor="filter-sla">
+            SLA status
+          </label>
+          <select
+            id="filter-sla"
+            value={filters.slaStatus ?? ''}
+            onChange={(event) =>
+              onChange({ slaStatus: (event.target.value || undefined) as SlaStatus | undefined })
+            }
+          >
+            <option value="">All SLA states</option>
+            <option value="WithinSla">Within SLA</option>
+            <option value="AtRisk">At risk</option>
+            <option value="Breached">Breached</option>
+            <option value="Met">Met</option>
+            <option value="NotApplicable">No SLA</option>
           </select>
         </div>
       </div>
