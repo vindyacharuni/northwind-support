@@ -166,7 +166,7 @@ npm run typecheck             # verifies full TypeScript typing
 ---
 
 ## 7. AI Usage Disclosure
-- **Tools & Purpose:** Pair programming assistant for scaffolding boilerplate DTOs, EF Core entity configurations, and generating comprehensive unit test edge cases.
+- **Tools & Purpose:** claudeCode, copilot, antigravity IDE, ChatGPT,claudeCode and ChatGPT for understanding the code, copilot and antigravity I used as agents
 - **Workflow:** Reviewed candidate assignment specifications, designed architecture collaboratively, implemented domain models, executed tests iteratively, and verified with strict TypeScript and .NET compiler checks.
 - **Changes / Rejections:** AI initially attempted to use `DateDiffMinute` unconditionally, which fails in SQLite in-memory test doubles; branched by database provider name to support both SQLite and SQL Server.
 - **Verification:** Every line of code was verified via `dotnet test` (87 passed), `vitest run` (17 passed), and `tsc -b --noEmit` (0 errors).
