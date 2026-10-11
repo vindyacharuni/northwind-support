@@ -14,7 +14,7 @@ public sealed class Agent : AggregateRoot
         // For EF Core.
     }
 
-    public Agent(string fullName, string email, int maxOpenTickets, DateTime createdAtUtc)
+    public Agent(string fullName, string email, int maxOpenTickets, DateTime createdAtUtc, string passwordHash = "")
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(fullName);
         ArgumentException.ThrowIfNullOrWhiteSpace(email);
@@ -25,11 +25,15 @@ public sealed class Agent : AggregateRoot
         IsActive = true;
         MaxOpenTickets = maxOpenTickets;
         CreatedAtUtc = createdAtUtc;
+        PasswordHash = passwordHash;
     }
 
     public string FullName { get; private set; } = string.Empty;
 
     public string Email { get; private set; } = string.Empty;
+
+    /// <summary>Hashed and salted password for authentication.</summary>
+    public string PasswordHash { get; private set; } = string.Empty;
 
     /// <summary>Inactive agents keep their history but take no new work.</summary>
     public bool IsActive { get; private set; }
@@ -41,6 +45,13 @@ public sealed class Agent : AggregateRoot
 
     /// <summary>The ticket categories this agent is qualified for.</summary>
     public IReadOnlyCollection<AgentSpecialization> Specializations => _specializations;
+
+    /// <summary>Sets the hashed and salted password.</summary>
+    public void SetPasswordHash(string passwordHash)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(passwordHash);
+        PasswordHash = passwordHash;
+    }
 
     /// <summary>Records that the agent is qualified for a category. Adding one twice is a no-op.</summary>
     public void AddSpecialization(int categoryId)

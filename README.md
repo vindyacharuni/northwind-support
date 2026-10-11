@@ -13,8 +13,8 @@ and move them through their lifecycle.
 | --- | --- | --- | --- |
 | 1 | **Fix a defect, add server-side filtering** | **Completed** | Root cause identified and resolved with Vitest regression test. All list filters applied in SQL Server before counting/paging. |
 | 2 | **Ticket escalation & assignment** | **Completed** | Automated triage on create (BR-1 to BR-6), escalation with immutable history (BR-7), SLA status evaluation (BR-8), database migration with indexed table, and React UI. |
-| 3 | **Login and authentication** | *Next* | Planned. |
-| 4 | **Dockerise the API** | *Pending* | Planned. |
+| 3 | **Login and authentication** | **Completed** | Full auth flow with JWT, PBKDF2 hashing, dev fixtures, central route protection, accessible `/login` page, token attachment, and 401 session clearing. |
+| 4 | **Dockerise the API** | *Next* | Planned. |
 
 ---
 
@@ -78,18 +78,63 @@ Implemented centrally in `apps/api/src/SupportDesk.Infrastructure/Queries/Ticket
 
 ---
 
-## 4. Design Decisions: Chosen, Rejected, and Why
+## 4. Login and Authentication (Task 3)
 
-| Decision | Chosen | Rejected | Why |
-| --- | --- | --- | --- |
-| **Triage & SLA Architecture** | Domain aggregate methods (`Ticket.Raise`, `Ticket.Escalate`) + Application services (`SlaPolicy`, `TicketTriageService`) | Everything in controller or EF DbContext hooks | Keeps business invariants inside domain entities while delegating multi-aggregate orchestration (agents, categories, customers) to application services. |
-| **SLA Status Calculation** | Pure in-memory evaluation for entities; SQL expression evaluation in `TicketQueries` for list queries | Storing SLA status as a database column | SLA status is time-dependent. Storing it leads to stale data without expensive background cron jobs updating every record. |
-| **Provider-Aware Date Math** | `DateDiffMinute` for SQL Server, `DateTime` arithmetic for SQLite test runner | Forcing all tests to run against Docker SQL Server | Allows fast, database-free in-memory unit tests while leveraging high-performance native SQL Server functions in production. |
-| **Configuration Binding** | Decoupled `SlaOptions` POCO | Referencing `Microsoft.Extensions.Options` in domain | Keeps domain and application core free of third-party framework dependencies. |
+### 4.1 Backend (AU-1 to AU-8)
+- **AU-1 Credentials Storage:** Stored directly on the `Agent` aggregate (`PasswordHash` NVARCHAR(500)) via committed migration `20261011140215_AddAgentPasswordHash`.
+  - *Justification:* In Northwind Support Desk, support agents are the only authenticated actors in the system. Placing credentials directly on `Agent` maintains 1:1 aggregate boundaries, eliminates redundant joins, avoids synchronization complexity between separate `Users` and `Agents` tables, and adheres to DDD principles.
+- **AU-2 Hashing & Salting:** Implemented using standard .NET PBKDF2 (`Rfc2898DeriveBytes.Pbkdf2`) with HMAC-SHA256, 100,000 iterations, and a 128-bit (16-byte) cryptographically secure random salt. Verifications use constant-time comparison (`CryptographicOperations.FixedTimeEquals`) to prevent timing side-channel attacks.
+- **AU-3 Seed Development Credentials:**
+  - *Dev Password:* **`Password123!`** (clearly a local development fixture).
+  - Seeded during database initialization in `SupportDbSeeder.cs`. All seeded active agents (`alex.turner@northwind-support.example`, `ben.osei@northwind-support.example`, `priya.nair@northwind-support.example`, `sara.lindqvist@northwind-support.example`, `marcus.doyle@northwind-support.example`) use this fixture.
+  - Inactive agent `yuki.tanaka@northwind-support.example` is also seeded with credentials to verify inactive account login rejection.
+- **AU-4 Login Endpoint (`POST /api/auth/login`):**
+  - Authenticates active agents; returns signed JWT token, expiry timestamp, and user greeting payload (`id`, `name`, `email`).
+  - Returns identical HTTP 401 and generic message `"Invalid email or password."` for unknown email, wrong password, or inactive agent, eliminating user enumeration vulnerabilities.
+- **AU-5 Me Endpoint (`GET /api/auth/me`):**
+  - Returns authenticated agent profile resolved from JWT `ClaimTypes.NameIdentifier` claim, or HTTP 401 if unauthenticated or inactive.
+- **AU-6 Central Route Protection:**
+  - Configured via ASP.NET Core `FallbackPolicy = new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build();`.
+  - Every existing and new endpoint requires a valid JWT token by default without needing repetitive `[Authorize]` attributes.
+  - `POST /api/auth/login` and Swagger (`/openapi`, `/swagger`) are explicitly configured with `[AllowAnonymous]`.
+- **AU-7 Signing Key & Token Lifetime:**
+  - Signing key configured via `Jwt:SigningKey` in `appsettings.json`, `appsettings.Development.json`, and `.env.example`. No hardcoded keys in source code.
+  - **Token Lifetime:** **480 minutes (8 hours)** — chosen to represent a standard work shift for support desk agents, avoiding disruptive session expiration while preventing indefinite token exposure.
+- **AU-8 EscalatedBy from Token:**
+  - `POST /api/tickets/{id}/escalate` extracts the acting agent's name directly from the validated JWT token (`User.FindFirst(ClaimTypes.Name)?.Value`), ignoring any caller-supplied value in the request body.
+
+### 4.2 Frontend (AU-9 to AU-13)
+- **AU-9 `/login` Page:** Accessible form with `<label htmlFor>`, clear field validation, pending submission state, and clear error banner on 401 credentials rejection.
+- **AU-10 Token Storage & Attachment:**
+  - Managed in `apps/web/src/api/client.ts`. Automatically attaches `Authorization: Bearer <token>` to all HTTP requests when token is present.
+  - *Where Kept:* Stored in browser `localStorage` (`northwind_support_token`).
+  - *Trade-off:* Storing in `localStorage` allows client-side Single Page Applications (SPAs) to manage token injection easily without server-side cookie domain restrictions or CSRF vulnerabilities. The trade-off is vulnerability to Cross-Site Scripting (XSS) if untrusted third-party code executes in the client origin. For an internal SPA without third-party script tags, paired with input sanitization, this provides a clean, stateless balance.
+- **AU-11 Route Protection & Redirection:**
+  - `<ProtectedRoute>` wraps all private routes (`/tickets`, `/tickets/:id`, `/tickets/new`, `/customers`).
+  - Unauthenticated requests redirect to `/login`, preserving `state: { from: location }` so agents return directly to their intended page upon login (or `/tickets` if visiting login directly).
+- **AU-12 Session Header & Logout:**
+  - Navigation header displays the signed-in agent's full name and a "Sign out" button that clears the token, resets context, and returns to `/login`.
+- **AU-13 Central 401 Handling:**
+  - Any 401 response (e.g. expired or invalid token) intercepted in `client.ts` immediately clears `localStorage` and triggers registered unauthorized handler, redirecting the user to `/login`.
 
 ---
 
-## 5. Testing
+## 5. Design Decisions: Chosen, Rejected, and Why
+
+| Decision | Chosen | Rejected | Why |
+| --- | --- | --- | --- |
+| **Credentials Storage (AU-1)** | Direct `PasswordHash` column on `Agent` aggregate | Separate `Users` table or ASP.NET Core Identity tables | Single-persona domain: all authenticated users are support agents. Keeps aggregate boundaries cohesive and avoids redundant table joins or synchronization. |
+| **Password Hashing (AU-2)** | Standard PBKDF2 (`Rfc2898DeriveBytes.Pbkdf2`) with HMAC-SHA256, 100k iterations, 128-bit salt | Plain text, MD5, SHA-256 without salt, or custom encryption | Cryptographically vetted, resistant to rainbow tables and brute force, built into .NET BCL without external native binary dependencies. |
+| **Route Protection (AU-6)** | ASP.NET Core central `FallbackPolicy` | Manually adding `[Authorize]` attributes to every controller/action | Secure-by-default posture: any newly created endpoint is automatically protected against unauthorized access unless explicitly marked `[AllowAnonymous]`. |
+| **Client Token Storage (AU-10)** | `localStorage` | In-memory only or `HttpOnly` cookie | In-memory tokens are lost on browser refresh; cookies require CSRF countermeasures and complicate cross-origin deployment. `localStorage` provides persistent session within token lifetime. |
+| **Triage & SLA Architecture** | Domain aggregate methods (`Ticket.Raise`, `Ticket.Escalate`) + Application services (`SlaPolicy`, `TicketTriageService`) | Everything in controller or EF DbContext hooks | Keeps business invariants inside domain entities while delegating multi-aggregate orchestration (agents, categories, customers) to application services. |
+| **SLA Status Calculation** | Pure in-memory evaluation for entities; SQL expression evaluation in `TicketQueries` for list queries | Storing SLA status as a database column | SLA status is time-dependent. Storing it leads to stale data without expensive background cron jobs updating every record. |
+| **Provider-Aware Date Math** | `DateDiffMinute` for SQL Server, `DateTime` arithmetic for SQLite test runner | Forcing all tests to run against Docker SQL Server | Allows fast, database-free in-memory unit tests while leveraging high-performance native SQL Server functions in production. |
+| **Configuration Binding** | Decoupled `SlaOptions` and `JwtOptions` POCOs | Referencing `Microsoft.Extensions.Options` in domain | Keeps domain and application core free of third-party framework dependencies. |
+
+---
+
+## 6. Testing
 
 ### How to Run
 ```bash
@@ -98,31 +143,43 @@ npm run typecheck             # verifies full TypeScript typing
 ```
 
 ### What Was Tested
-- **Backend (71 tests across Unit and Architecture suites):**
-  - Architecture tests: Layer dependency constraints.
+- **Backend (87 tests across Unit and Architecture suites):**
+  - Architecture tests: Layer dependency constraints, controller authorization enforcement, and token actor extraction.
+  - Security & Hashing (`PasswordHasherTests`): Password verification correctness, rejection of wrong passwords, unique salts per hash, and malformed payload rejection.
+  - Authentication Handlers (`LoginCommandHandlerTests`, `GetCurrentUserQueryHandlerTests`): Correct credential verification, identical 401s for wrong email/password, inactive agent blocking, and active user profile retrieval.
   - SlaPolicy: Base windows per priority, premium customer half-window, 1-hour floor.
   - TicketTriageService: Category forcing Critical, fewest open tickets, specialist requirements, capacity limits, inactive agent exclusion, deterministic tie-breaking.
   - Escalation handler: 1-step bump, due date from now, assignee retention/reassignment, 409 rejections on Critical/Resolved/Closed tickets.
   - Ticket queries: SQL-level filtering for Breached, Met, search, and newest-first history sorting.
   - SlaEvaluator: Exact boundary tests (including $\le 25\%$ at-risk threshold).
   - PersistenceModelTests: Model snapshot matches EF migrations.
-- **Frontend (9 tests across 4 test suites):**
+- **Frontend (17 tests across 7 test suites):**
   - Dropdown filter immediacy and debounced search behavior (DEFECT-117).
   - SLA Indicator rendering all 5 states distinguishably with distinct symbols and labels.
   - Escalation panel: short reason (<5 chars) blocks submission and never calls API.
   - Escalation panel: 409 conflict error message is rendered and ticket remains unchanged.
   - Escalation panel: non-escalatable tickets disable submission.
+  - `LoginPage.test.tsx`: client validation blocks submission on empty fields, displays clear error on 401, successful login navigates to target.
+  - `ProtectedRoute.test.tsx`: redirects unauthenticated visitors to `/login`, renders protected content when authenticated.
+  - `client.test.ts`: attaches stored Bearer token, clears token and triggers unauthorized callback on 401, manages token storage lifecycle.
 
 ---
 
-## 6. AI Usage Disclosure
+## 7. AI Usage Disclosure
 - **Tools & Purpose:** Pair programming assistant for scaffolding boilerplate DTOs, EF Core entity configurations, and generating comprehensive unit test edge cases.
 - **Workflow:** Reviewed candidate assignment specifications, designed architecture collaboratively, implemented domain models, executed tests iteratively, and verified with strict TypeScript and .NET compiler checks.
 - **Changes / Rejections:** AI initially attempted to use `DateDiffMinute` unconditionally, which fails in SQLite in-memory test doubles; branched by database provider name to support both SQLite and SQL Server.
-- **Verification:** Every line of code was verified via `dotnet test` (71 passed), `vitest run` (9 passed), and `tsc -b --noEmit` (0 errors).
+- **Verification:** Every line of code was verified via `dotnet test` (87 passed), `vitest run` (17 passed), and `tsc -b --noEmit` (0 errors).
 
 ---
 
-## 7. Known Limitations
-- Background worker/scheduler for proactive SLA breach notifications is not implemented (out of scope).
-- User authentication and actor resolution from JWT will be implemented in Task 3 (currently accepts actor name).
+## 8. Known Limitations
+- Self-service registration, password reset, and email verification workflows are not implemented (all accounts are provisioned agents).
+- OAuth2, OpenID Connect, and SSO enterprise providers are not integrated (direct password authentication only).
+- Refresh tokens and sliding session extensions are omitted; sessions expire at the 8-hour boundary.
+- Multi-Factor Authentication (MFA / TOTP) is not implemented.
+- Account lockout policies and rate limiting on `/api/auth/login` are not configured (recommended for public production deployments).
+- Fine-grained role-based permissions matrix is not present (all authenticated agents have uniform access to the support desk).
+- TLS/HTTPS certificate provisioning is delegated to reverse proxy or cloud ingress infrastructure.
+- Background worker/scheduler for proactive SLA breach notifications is not implemented.
+

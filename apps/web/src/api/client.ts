@@ -6,6 +6,38 @@ import type { ProblemDetails } from '../types/api';
  */
 const baseUrl = import.meta.env.VITE_API_BASE_URL ?? '/api';
 
+const TOKEN_KEY = 'northwind_support_token';
+
+let onUnauthorizedCallback: (() => void) | null = null;
+
+export function registerUnauthorizedHandler(callback: (() => void) | null): void {
+  onUnauthorizedCallback = callback;
+}
+
+export function getStoredToken(): string | null {
+  try {
+    return localStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setStoredToken(token: string): void {
+  try {
+    localStorage.setItem(TOKEN_KEY, token);
+  } catch {
+    // LocalStorage may fail in private mode or quota exceeded
+  }
+}
+
+export function clearStoredToken(): void {
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // Ignore
+  }
+}
+
 /** A failed HTTP call, carrying the problem document the API returned. */
 export class ApiError extends Error {
   readonly status: number;
@@ -26,19 +58,36 @@ export class ApiError extends Error {
 }
 
 /**
- * The single place that talks to the API. Returns parsed JSON, or throws an
- * {@link ApiError} that callers can show to the user.
+ * The single place that talks to the API. Attaches Bearer token if present,
+ * returns parsed JSON, or throws an {@link ApiError} that callers can show to the user.
  */
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getStoredToken();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...((init?.headers as Record<string, string> | undefined) ?? {}),
+  };
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
+    headers,
   });
 
   if (!response.ok) {
+    // AU-13: Any 401 (e.g. expired token) on authenticated calls clears session and redirects
+    if (response.status === 401 && !path.startsWith('/auth/login')) {
+      clearStoredToken();
+      if (onUnauthorizedCallback) {
+        onUnauthorizedCallback();
+      } else if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+        window.location.href = '/login';
+      }
+    }
+
     const problem = await readProblem(response);
 
     throw new ApiError(
