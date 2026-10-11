@@ -53,6 +53,18 @@ public sealed class Agent : AggregateRoot
         PasswordHash = passwordHash;
     }
 
+    public void ChangeEmail(string email)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(email);
+        Email = email.Trim();
+    }
+
+    public void ChangeFullName(string fullName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fullName);
+        FullName = fullName.Trim();
+    }
+
     /// <summary>Records that the agent is qualified for a category. Adding one twice is a no-op.</summary>
     public void AddSpecialization(int categoryId)
     {
