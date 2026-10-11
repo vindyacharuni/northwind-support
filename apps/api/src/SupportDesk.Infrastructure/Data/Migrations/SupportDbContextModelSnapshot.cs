@@ -49,6 +49,11 @@ namespace SupportDesk.Infrastructure.Data.Migrations
                     b.Property<int>("MaxOpenTickets")
                         .HasColumnType("int");
 
+                    b.Property<string>("PasswordHash")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
                     b.HasKey("Id");
 
                     b.HasIndex("Email")

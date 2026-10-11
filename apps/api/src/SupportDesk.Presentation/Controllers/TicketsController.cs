@@ -47,8 +47,16 @@ public sealed class TicketsController : ControllerBase
         int id,
         EscalateTicketRequest request,
         [FromServices] EscalateTicketCommandHandler handler,
-        CancellationToken ct) =>
-        handler.HandleAsync(id, request, ct);
+        CancellationToken ct)
+    {
+        var actor = User.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value
+            ?? User.Identity?.Name
+            ?? request.EscalatedBy
+            ?? throw new SupportDesk.Application.Exceptions.UnauthorizedException("User is not authenticated.");
+
+        var requestWithActor = request with { EscalatedBy = actor };
+        return handler.HandleAsync(id, requestWithActor, ct);
+    }
 
     /// <summary>Returns escalation history for a ticket.</summary>
     [HttpGet("{id:int}/escalations")]

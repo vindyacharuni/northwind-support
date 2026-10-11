@@ -69,18 +69,23 @@ public sealed class SupportDbSeeder(SupportDbContext db, IClock clock, ILogger<S
         new("Wide World Importers", "support@wideworld.example", "+65 6555 0106", CustomerTier.Premium, now.AddDays(-90))
     ];
 
+    public const string DefaultDevPassword = "Password123!";
+
     private static List<Agent> SeedAgents(DateTime now)
     {
-        var yuki = new Agent("Yuki Tanaka", "yuki.tanaka@northwind-support.example", 8, now.AddDays(-600));
+        var hasher = new Security.PasswordHasher();
+        var devPasswordHash = hasher.HashPassword(DefaultDevPassword);
+
+        var yuki = new Agent("Yuki Tanaka", "yuki.tanaka@northwind-support.example", 8, now.AddDays(-600), devPasswordHash);
         yuki.Deactivate();
 
         return
         [
-            new("Alex Turner", "alex.turner@northwind-support.example", 10, now.AddDays(-500)),
-            new("Ben Osei", "ben.osei@northwind-support.example", 8, now.AddDays(-460)),
-            new("Priya Nair", "priya.nair@northwind-support.example", 8, now.AddDays(-400)),
-            new("Sara Lindqvist", "sara.lindqvist@northwind-support.example", 6, now.AddDays(-280)),
-            new("Marcus Doyle", "marcus.doyle@northwind-support.example", 6, now.AddDays(-200)),
+            new("Alex Turner", "alex.turner@northwind-support.example", 10, now.AddDays(-500), devPasswordHash),
+            new("Ben Osei", "ben.osei@northwind-support.example", 8, now.AddDays(-460), devPasswordHash),
+            new("Priya Nair", "priya.nair@northwind-support.example", 8, now.AddDays(-400), devPasswordHash),
+            new("Sara Lindqvist", "sara.lindqvist@northwind-support.example", 6, now.AddDays(-280), devPasswordHash),
+            new("Marcus Doyle", "marcus.doyle@northwind-support.example", 6, now.AddDays(-200), devPasswordHash),
             yuki
         ];
     }
